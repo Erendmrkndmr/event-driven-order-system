@@ -1,0 +1,89 @@
+name: event-driven-order-system
+
+networks:
+  app-net:
+    driver: bridge
+
+volumes:
+  pgdata:
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: eda-postgres
+    environment:
+      POSTGRES_USER: acme
+      POSTGRES_PASSWORD: acme
+      POSTGRES_DB: acme
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d:ro
+    networks: [app-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acme -d acme"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: eda-rabbit
+    environment:
+      RABBITMQ_DEFAULT_USER: eda_user
+      RABBITMQ_DEFAULT_PASS: eda_pass
+      RABBITMQ_DEFAULT_VHOST: /acme
+    ports:
+      - "127.0.0.1:15672:15672"
+    networks: [app-net]
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  orderapi:
+    build: ./services/order-api
+    container_name: eda-orderapi
+    environment:
+      DATABASE_URL: postgresql+psycopg2://acme:acme@postgres:5432/acme
+      RABBITMQ_URL: amqp://eda_user:eda_pass@rabbitmq:5672/%2Facme
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    networks: [app-net]
+    restart: unless-stopped
+
+  orderpublisher:
+    build: ./services/order-publisher
+    container_name: eda-orderpublisher
+    environment:
+      DATABASE_URL: postgresql+psycopg2://acme:acme@postgres:5432/acme
+      RABBITMQ_URL: amqp://eda_user:eda_pass@rabbitmq:5672/%2Facme
+      OUTBOX_POLL_SEC: "0.5"
+      OUTBOX_BATCH_SIZE: "200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks: [app-net]
+    restart: unless-stopped
+
+  dev-consumer:
+    build: ./services/dev-consumer
+    container_name: eda-dev-consumer
+    environment:
+      RABBITMQ_URL: amqp://eda_user:eda_pass@rabbitmq:5672/%2Facme
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks: [app-net]
+    restart: unless-stopped
+
