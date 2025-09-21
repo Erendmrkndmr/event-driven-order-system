@@ -17,6 +17,12 @@ def connect_rabbitmq_with_retry(max_wait_sec: int = 60):
     while True:
         try:
             params = pika.URLParameters(RABBITMQ_URL)
+            # bağlantı dayanıklılığı
+            params.heartbeat = 30
+            params.blocked_connection_timeout = 300
+            params.connection_attempts = 5
+            params.retry_delay = 2
+
             conn = pika.BlockingConnection(params)
             ch = conn.channel()
             ch.exchange_declare(exchange="acme.events", exchange_type="direct", durable=True)
@@ -26,6 +32,7 @@ def connect_rabbitmq_with_retry(max_wait_sec: int = 60):
             sleep = min(2 ** attempt, max_wait_sec)
             print(f"[publisher] RabbitMQ connect failed ({e}); retrying in {sleep}s", flush=True)
             time.sleep(sleep)
+
 
 def get_db_session_with_retry(max_wait_sec: int = 60):
     attempt = 0
@@ -41,28 +48,47 @@ def get_db_session_with_retry(max_wait_sec: int = 60):
             time.sleep(sleep)
 
 def publish_batch(channel, rows, db):
+    global conn  # reconnect için erişelim (conn'u loop() içinde tanımlıyoruz)
     for r in rows:
-        try:
-            body = json.dumps(r.payload).encode("utf-8")
-            channel.basic_publish(
-                exchange="acme.events",
-                routing_key=r.event_type,  # direct exchange: event_type ile route ediyoruz
-                body=body,
-                properties=pika.BasicProperties(
-                    content_type="application/json",
-                    delivery_mode=2,  # persistent
-                ),
-            )
-            db.execute(text("""
-                UPDATE event_outbox
-                   SET status='PUBLISHED', published_at=NOW()
-                 WHERE id=:id
-            """), {"id": r.id})
-        except Exception as e:
-            print(f"[publisher] publish failed id={r.id}: {e}", flush=True)
-            db.execute(text("UPDATE event_outbox SET status='FAILED' WHERE id=:id"), {"id": r.id})
+        body = json.dumps(r.payload).encode("utf-8")
+        published = False
+        for attempt in range(2):  # ilk deneme + 1 retry
+            try:
+                channel.basic_publish(
+                    exchange="acme.events",
+                    routing_key=r.event_type,
+                    body=body,
+                    properties=pika.BasicProperties(
+                        content_type="application/json",
+                        delivery_mode=2,  # persistent
+                    ),
+                )
+                db.execute(text("""
+                    UPDATE event_outbox
+                       SET status='PUBLISHED', published_at=NOW()
+                     WHERE id=:id
+                """), {"id": r.id})
+                published = True
+                break
+            except Exception as e:
+                print(f"[publisher] publish failed id={r.id} (attempt {attempt+1}): {e}", flush=True)
+                # Kanal/bağlantı kapanmış olabilir: yeniden bağlan
+                try:
+                    channel.close()
+                except:  # noqa
+                    pass
+                try:
+                    conn.close()
+                except:  # noqa
+                    pass
+                conn, channel = connect_rabbitmq_with_retry()
+        if not published:
+            # agresif FAILED yapmıyoruz; kayıt NEW kalsın, loop tekrar deneyecek
+            print(f"[publisher] giving up for now id={r.id}; will retry on next loop", flush=True)
+
 
 def loop():
+    global conn
     conn, channel = connect_rabbitmq_with_retry()
     print("[publisher] connected to RabbitMQ", flush=True)
 

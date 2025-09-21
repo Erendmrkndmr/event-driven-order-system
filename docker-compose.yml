@@ -87,3 +87,47 @@ services:
     networks: [app-net]
     restart: unless-stopped
 
+  inventory:
+    build: ./services/inventory-service
+    container_name: eda-inventory
+    environment:
+      DATABASE_URL: postgresql+psycopg2://acme:acme@postgres:5432/acme
+      RABBITMQ_URL: amqp://eda_user:eda_pass@rabbitmq:5672/%2Facme
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks: [app-net]
+    restart: unless-stopped
+
+  payment:
+      build: ./services/payment-service
+      image: eda/payment:dev
+      container_name: eda-payment
+      environment:
+        DATABASE_URL: postgresql+psycopg2://acme:acme@postgres:5432/acme
+        RABBITMQ_URL: amqp://eda_user:eda_pass@rabbitmq:5672/%2Facme
+        PAYMENT_SUCCESS_RATE: "0.9"
+      depends_on:
+        postgres:
+          condition: service_healthy
+        rabbitmq:
+          condition: service_healthy
+      networks: [app-net]
+      restart: unless-stopped
+  notification:
+      build: ./services/notification-service
+      image: eda/notification:dev
+      container_name: eda-notification
+      environment:
+        DATABASE_URL: postgresql+psycopg2://acme:acme@postgres:5432/acme
+        RABBITMQ_URL: amqp://eda_user:eda_pass@rabbitmq:5672/%2Facme
+      depends_on:
+        postgres:
+          condition: service_healthy
+        rabbitmq:
+          condition: service_healthy
+      networks: [app-net]
+      restart: unless-stopped
+
