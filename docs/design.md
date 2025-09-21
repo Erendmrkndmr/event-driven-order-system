@@ -8,23 +8,39 @@ This document explains the architecture, design choices, scalability considerati
 
 ```mermaid
 flowchart LR
-    A[Client / Frontend] -->|POST orders| B[Order API (FastAPI)]
-    B -->|Insert order + outbox| C[(PostgreSQL)]
-    C -->|Outbox Publisher reads NEW| D[Outbox Publisher]
-    D -->|Publish order.placed| E[[RabbitMQ Exchange: acme.events]]
+    %% Clients & Order domain
+    client[Client_Frontend] --> order_api[Order_API_FastAPI];
+    order_api --> db[(PostgreSQL_DB)];
+    order_api --> outbox[Outbox_table];
+    outbox --> publisher[Outbox_Publisher];
+    publisher --> exch[RabbitMQ_acme.events_direct];
 
-    E -->|order.placed| F[Inventory Service]
-    F -->|inventory.reserved| E
-    E -->|inventory.reserved| G[Payment Service]
-    E -->|order.out_of_stock| H[Notification Service]
-    E -->|payment.completed/payment.failed| H
+    %% inventory subscribes to order.placed
+    exch -->|order.placed| q_inv_placed[q_inventory_order_placed];
+    q_inv_placed --> inventory[Inventory_Service];
 
-    F -->|update stock & status| C
-    G -->|update payment status| C
-    H -->|log notification| I[Email / Log]
+    %% inventory publishes inventory.reserved or order.out_of_stock
+    inventory --> db;
+    inventory -->|inventory.reserved| exch;
+    inventory -->|order.out_of_stock| exch;
 
-    classDef service fill:#cce5ff,stroke:#007bff,stroke-width:1px;
-    class B,D,F,G,H service;
+    %% payment subscribes to inventory.reserved
+    exch -->|inventory.reserved| q_pay_res[q_payment_inventory_reserved];
+    q_pay_res --> payment[Payment_Service];
+
+    %% payment publishes payment.completed/failed
+    payment --> db;
+    payment -->|payment.completed| exch;
+    payment -->|payment.failed| exch;
+
+    %% notification subscribes to payment.* and out_of_stock
+    exch -->|payment.completed| q_notif_ok[q_notification_payment_completed];
+    exch -->|payment.failed| q_notif_fail[q_notification_payment_failed];
+    exch -->|order.out_of_stock| q_notif_oos[q_notification_order_out_of_stock];
+    q_notif_ok --> notification[Notification_Service];
+    q_notif_fail --> notification;
+    q_notif_oos --> notification;
+    notification --> email[Email_Log];
 ```
 
 **Flow Explanation:**
