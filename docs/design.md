@@ -8,7 +8,7 @@ This document explains the architecture, design choices, scalability considerati
 
 ```mermaid
 flowchart LR
-    A[Client / Frontend] -->|POST /orders| B[Order API (FastAPI)]
+    A[Client / Frontend] -->|POST orders| B[Order API (FastAPI)]
     B -->|Insert order + outbox| C[(PostgreSQL)]
     C -->|Outbox Publisher reads NEW| D[Outbox Publisher]
     D -->|Publish order.placed| E[[RabbitMQ Exchange: acme.events]]
@@ -17,7 +17,7 @@ flowchart LR
     F -->|inventory.reserved| E
     E -->|inventory.reserved| G[Payment Service]
     E -->|order.out_of_stock| H[Notification Service]
-    E -->|payment.completed / payment.failed| H
+    E -->|payment.completed/payment.failed| H
 
     F -->|update stock & status| C
     G -->|update payment status| C
